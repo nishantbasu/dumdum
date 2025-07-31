@@ -1,0 +1,38 @@
+{
+  "name": "langgraph-agents",
+  "version": "1.0.0",
+  "description": "Production-grade LangGraph agents with memory, research, and retrieval capabilities",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "npx @langchain/langgraph-cli dev",
+    "build": "npx @langchain/langgraph-cli build",
+    "up": "npx @langchain/langgraph-cli up",
+    "dockerfile": "npx @langchain/langgraph-cli dockerfile",
+    "start": "npx @langchain/langgraph-cli dev"
+  },
+  "dependencies": {
+    "@langchain/community": "^0.3.0",
+    "@langchain/core": "^0.3.0", 
+    "@langchain/langgraph": "^0.4.0",
+    "@langchain/openai": "^0.3.0"
+  },
+  "devDependencies": {
+    "@langchain/langgraph-cli": "^0.0.51"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "langgraph",
+    "langchain", 
+    "ai",
+    "agents",
+    "memory",
+    "research",
+    "retrieval",
+    "production"
+  ],
+  "author": "",
+  "license": "MIT"
+}
