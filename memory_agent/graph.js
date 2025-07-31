@@ -1,8 +1,16 @@
 // src/memory_agent/graph.js
-const { StateGraph, MessagesAnnotation, START, END } = require("@langchain/langgraph");
+const { StateGraph, START, END, Annotation } = require("@langchain/langgraph");
 const { ChatOpenAI } = require("@langchain/openai");
 const { MemorySaver } = require("@langchain/langgraph");
-const { HumanMessage, SystemMessage } = require("@langchain/core/messages");
+const { HumanMessage, SystemMessage, AIMessage } = require("@langchain/core/messages");
+
+// Define memory agent state using proper Annotation
+const MemoryState = Annotation.Root({
+  messages: Annotation({
+    reducer: (x, y) => x.concat(y), 
+    default: () => []
+  })
+});
 
 // Custom LLM configuration
 function createCustomLLM(modelName) {
@@ -55,27 +63,37 @@ When responding:
 
 Always be helpful while demonstrating your memory capabilities.`);
 
-  // Add system message if not present
-  const messagesWithSystem = [systemMessage, ...messages];
+  // Create messages array with system message first, then conversation history
+  let messagesToSend = [systemMessage];
+  
+  // Add all messages from state
+  if (messages && messages.length > 0) {
+    messagesToSend = messagesToSend.concat(messages);
+  }
   
   try {
-    const response = await llm.invoke(messagesWithSystem);
+    const response = await llm.invoke(messagesToSend);
+    
     return {
       messages: [response]
     };
   } catch (error) {
     console.error('Memory agent error:', error);
-    throw error;
+    
+    const errorMessage = new AIMessage("I apologize, but I'm experiencing a technical issue. Please try again.");
+    return {
+      messages: [errorMessage]
+    };
   }
 }
 
 // Create the memory agent workflow
-const workflow = new StateGraph(MessagesAnnotation)
+const workflow = new StateGraph(MemoryState)
   .addNode("memory_node", memoryNode)
   .addEdge(START, "memory_node")
   .addEdge("memory_node", END);
 
-// Compile with memory checkpointer
+// Compile with memory checkpointer for persistence
 const memory = new MemorySaver();
 const graph = workflow.compile({
   checkpointer: memory
