@@ -1,9 +1,16 @@
 // src/react_agent/graph.js
 const { createReactAgent } = require("@langchain/langgraph/prebuilt");
 const { ChatOpenAI } = require("@langchain/openai");
-const { TavilySearchResults } = require("@langchain/community/tools/tavily_search");
 const { Calculator } = require("@langchain/community/tools/calculator");
 const { DynamicTool } = require("@langchain/core/tools");
+
+// Conditionally import Tavily only if available
+let TavilySearchResults;
+try {
+  TavilySearchResults = require("@langchain/community/tools/tavily_search").TavilySearchResults;
+} catch (error) {
+  console.log("Tavily not available - web search disabled");
+}
 
 // Custom LLM configuration for your models
 function createCustomLLM(modelName) {
@@ -41,7 +48,7 @@ function createReactAgentTools() {
   tools.push(new Calculator());
 
   // Web search tool (optional - requires Tavily API key)
-  if (process.env.TAVILY_API_KEY) {
+  if (process.env.TAVILY_API_KEY && TavilySearchResults) {
     tools.push(new TavilySearchResults({
       maxResults: 5,
       apiKey: process.env.TAVILY_API_KEY
@@ -66,7 +73,7 @@ function createReactAgentTools() {
         nodeVersion: process.version,
         platform: process.platform,
         arch: process.arch,
-        uptime: process.uptime(),
+        uptime: Math.floor(process.uptime()),
         memoryUsage: process.memoryUsage()
       }, null, 2);
     }
@@ -77,12 +84,16 @@ function createReactAgentTools() {
     name: "random_number",
     description: "Generate a random number between min and max. Input format: 'min,max'",
     func: async (input) => {
-      const [min, max] = input.split(',').map(n => parseInt(n.trim()));
-      if (isNaN(min) || isNaN(max)) {
-        return 'Please provide valid numbers in format: min,max';
+      try {
+        const [min, max] = input.split(',').map(n => parseInt(n.trim()));
+        if (isNaN(min) || isNaN(max)) {
+          return 'Please provide valid numbers in format: min,max';
+        }
+        const random = Math.floor(Math.random() * (max - min + 1)) + min;
+        return `Random number between ${min} and ${max}: ${random}`;
+      } catch (error) {
+        return 'Error generating random number. Use format: min,max';
       }
-      const random = Math.floor(Math.random() * (max - min + 1)) + min;
-      return `Random number between ${min} and ${max}: ${random}`;
     }
   }));
 
@@ -97,7 +108,7 @@ const graph = createReactAgent({
 
 Available tools:
 - Calculator: For mathematical calculations
-- Web search: For finding current information online (if configured)
+- Web search: For finding current information online ${process.env.TAVILY_API_KEY ? '(enabled)' : '(disabled - no API key)'}
 - Current time: Get the current date and time
 - System info: Get information about the system
 - Random number: Generate random numbers
