@@ -1,24 +1,32 @@
-// src/retrieval_agent/graph.js
+// src/research_agent/graph.js
 const { StateGraph, START, END, Annotation } = require("@langchain/langgraph");
 const { ChatOpenAI } = require("@langchain/openai");
 const { DynamicTool } = require("@langchain/core/tools");
 const { HumanMessage, SystemMessage, AIMessage } = require("@langchain/core/messages");
 
-// Define retrieval state using proper Annotation
-const RetrievalState = Annotation.Root({
+// Conditionally import Tavily only if available
+let TavilySearchResults;
+try {
+  TavilySearchResults = require("@langchain/community/tools/tavily_search").TavilySearchResults;
+} catch (error) {
+  console.log("Tavily not available - web search disabled for research agent");
+}
+
+// Define research state using proper Annotation
+const ResearchState = Annotation.Root({
   messages: Annotation({
     reducer: (x, y) => x.concat(y),
     default: () => []
   }),
-  query: Annotation({
+  research_query: Annotation({
     reducer: (x, y) => y ?? x ?? "",
     default: () => ""
   }),
-  retrieved_docs: Annotation({
+  search_results: Annotation({
     reducer: (x, y) => y ?? x ?? [],
     default: () => []
   }),
-  context: Annotation({
+  research_summary: Annotation({
     reducer: (x, y) => y ?? x ?? "",
     default: () => ""
   })
@@ -47,130 +55,57 @@ function createCustomLLM(modelName) {
     apiKey: process.env.CUSTOM_API_KEY,
     baseURL: config.baseURL,
     model: config.model,
-    temperature: 0.1, // Very low temperature for accurate retrieval
+    temperature: 0.3, // Lower temperature for research accuracy
     streaming: true,
   });
 }
 
-// Mock document store (replace with your actual vector database/knowledge base)
-const mockDocuments = [
-  {
-    id: "doc1",
-    title: "Introduction to Machine Learning",
-    content: "Machine learning is a subset of artificial intelligence that enables computers to learn and improve from experience without being explicitly programmed. It involves algorithms that can identify patterns in data and make predictions or decisions. Key concepts include supervised learning, unsupervised learning, and reinforcement learning.",
-    metadata: { category: "AI/ML", date: "2024-01-15", author: "Tech Team" }
-  },
-  {
-    id: "doc2", 
-    title: "Web Development Best Practices",
-    content: "Modern web development follows several key principles: responsive design, performance optimization, accessibility, security, and maintainable code structure. React, Node.js, and TypeScript are popular technologies in the current ecosystem. Important considerations include SEO, user experience, and scalability.",
-    metadata: { category: "Web Dev", date: "2024-02-10", author: "Dev Team" }
-  },
-  {
-    id: "doc3",
-    title: "Database Design Principles",
-    content: "Good database design involves normalization, proper indexing, query optimization, and understanding relationships between entities. SQL and NoSQL databases each have their use cases depending on the application requirements. Consider factors like ACID compliance, scalability, and data consistency.",
-    metadata: { category: "Database", date: "2024-01-20", author: "Data Team" }
-  },
-  {
-    id: "doc4",
-    title: "API Security Guidelines",
-    content: "API security involves authentication, authorization, rate limiting, input validation, and proper error handling. JWT tokens, OAuth 2.0, and API keys are common authentication methods. Always use HTTPS and validate all inputs. Implement proper logging and monitoring for security incidents.",
-    metadata: { category: "Security", date: "2024-02-05", author: "Security Team" }
-  },
-  {
-    id: "doc5",
-    title: "Cloud Computing Overview",
-    content: "Cloud computing provides on-demand access to computing resources including servers, storage, databases, and applications. Major providers include AWS, Azure, and Google Cloud. Key benefits include scalability, cost-effectiveness, and reliability. Consider factors like data sovereignty and vendor lock-in.",
-    metadata: { category: "Cloud", date: "2024-01-30", author: "Infrastructure Team" }
-  }
-];
-
-// Create retrieval tools
-function createRetrievalTools() {
+// Create research tools
+function createResearchTools() {
   const tools = [];
 
-  // Document search tool
-  tools.push(new DynamicTool({
-    name: "search_documents",
-    description: "Search through the knowledge base documents using keywords",
-    func: async (query) => {
-      try {
-        const searchTerms = query.toLowerCase().split(' ');
-        
-        const relevantDocs = mockDocuments.filter(doc => {
-          const searchableText = `${doc.title} ${doc.content} ${doc.metadata.category}`.toLowerCase();
-          return searchTerms.some(term => searchableText.includes(term));
-        });
+  // Web search tool (optional)
+  if (process.env.TAVILY_API_KEY && TavilySearchResults) {
+    tools.push(new TavilySearchResults({
+      maxResults: 10,
+      apiKey: process.env.TAVILY_API_KEY,
+      includeAnswer: true,
+      includeRawContent: true
+    }));
+  }
 
-        return JSON.stringify(relevantDocs.map(doc => ({
-          id: doc.id,
-          title: doc.title,
-          content: doc.content.substring(0, 200) + '...',
-          category: doc.metadata.category,
-          relevanceScore: Math.random() * 0.3 + 0.7 // Mock relevance score
-        })));
-      } catch (error) {
-        console.error('Document search error:', error);
-        return JSON.stringify([]);
-      }
+  // Mock research database tool (replace with your actual data sources)
+  tools.push(new DynamicTool({
+    name: "research_database",
+    description: "Search internal research database for academic papers and reports",
+    func: async (query) => {
+      // Mock implementation - replace with actual database search
+      return `Searched internal database for: "${query}". Found 3 relevant research papers: 
+      1. "AI Applications in Modern Technology" (2024) - Discusses current AI trends and applications
+      2. "Machine Learning Trends and Analysis" (2024) - Comprehensive analysis of ML developments
+      3. "Future of Artificial Intelligence" (2023) - Predictions and forecasts for AI advancement
+      
+      Note: This is a mock result. Replace with actual database integration.`;
     }
   }));
 
-  // Document retrieval by ID
+  // Citation formatter tool
   tools.push(new DynamicTool({
-    name: "get_document",
-    description: "Retrieve a specific document by its ID",
-    func: async (docId) => {
+    name: "format_citations",
+    description: "Format research citations in APA or MLA style. Input format: 'style|citation'",
+    func: async (input) => {
       try {
-        const doc = mockDocuments.find(d => d.id === docId);
-        if (!doc) {
-          return "Document not found";
-        }
-        return JSON.stringify(doc);
-      } catch (error) {
-        console.error('Document retrieval error:', error);
-        return "Error retrieving document";
-      }
-    }
-  }));
-
-  // Semantic similarity search (mock implementation)
-  tools.push(new DynamicTool({
-    name: "semantic_search",
-    description: "Find documents semantically similar to the query",
-    func: async (query) => {
-      try {
-        // Mock semantic search - in production, use vector embeddings
-        const keywords = {
-          'machine learning': ['AI/ML'],
-          'artificial intelligence': ['AI/ML'],
-          'web development': ['Web Dev'],
-          'database': ['Database'],
-          'security': ['Security'],
-          'cloud': ['Cloud']
-        };
-
-        const queryLower = query.toLowerCase();
-        let relevantCategories = [];
+        const [style, ...citationParts] = input.split('|');
+        const citation = citationParts.join('|');
         
-        for (const [key, categories] of Object.entries(keywords)) {
-          if (queryLower.includes(key)) {
-            relevantCategories.push(...categories);
-          }
+        if (style.toLowerCase() === 'apa') {
+          return `APA Format: ${citation} (Retrieved ${new Date().toLocaleDateString()})`;
+        } else if (style.toLowerCase() === 'mla') {
+          return `MLA Format: ${citation}. Web. ${new Date().toLocaleDateString()}.`;
         }
-
-        const semanticDocs = mockDocuments.filter(doc => 
-          relevantCategories.includes(doc.metadata.category)
-        );
-
-        return JSON.stringify(semanticDocs.map(doc => ({
-          ...doc,
-          semanticScore: Math.random() * 0.2 + 0.8 // Mock semantic score
-        })));
+        return `Citation: ${citation}`;
       } catch (error) {
-        console.error('Semantic search error:', error);
-        return JSON.stringify([]);
+        return 'Error formatting citation. Use format: style|citation';
       }
     }
   }));
@@ -178,143 +113,135 @@ function createRetrievalTools() {
   return tools;
 }
 
-// Query analysis node
-async function analyzeQuery(state) {
+// Research planning node
+async function planResearch(state) {
   const { messages } = state;
   const llm = createCustomLLM(process.env.DEFAULT_MODEL || 'grok');
   
   const lastMessage = messages[messages.length - 1];
   const userQuery = lastMessage?.content || "No query provided";
   
-  const analysisPrompt = `Analyze this user query and determine the best retrieval strategy:
+  const planningPrompt = `You are a research planning assistant. Analyze this research request and create a structured research plan:
 
-User Query: "${userQuery}"
+User Request: "${userQuery}"
 
-Consider:
-1. What type of information is the user looking for?
-2. What are the key search terms and concepts?
-3. Should we use keyword search, semantic search, or both?
-4. What document categories might be relevant?
+Create a research plan that includes:
+1. Key research questions to investigate
+2. Search terms and keywords to use
+3. Types of sources to look for
+4. Expected output format
 
-Respond with your analysis and recommended search strategy.`;
+Respond with a clear research plan.`;
 
   try {
-    const response = await llm.invoke([new HumanMessage(analysisPrompt)]);
+    const response = await llm.invoke([new HumanMessage(planningPrompt)]);
     
     return {
-      query: userQuery,
-      messages: [new AIMessage(`Query Analysis:\n\n${response.content}`)]
+      research_query: userQuery,
+      messages: [new AIMessage(`Research Plan Created:\n\n${response.content}`)]
     };
   } catch (error) {
-    console.error('Query analysis error:', error);
+    console.error('Research planning error:', error);
     return {
-      query: userQuery,
-      messages: [new AIMessage("Error analyzing query. Proceeding with default search.")]
+      research_query: userQuery,
+      messages: [new AIMessage("Error creating research plan. Proceeding with basic research.")]
     };
   }
 }
 
-// Document retrieval node
-async function retrieveDocuments(state) {
-  const { query, messages } = state;
-  const tools = createRetrievalTools();
+// Research execution node
+async function executeResearch(state) {
+  const { research_query, messages } = state;
+  const tools = createResearchTools();
   
-  const retrievedDocs = [];
+  const searchResults = [];
   
-  try {
-    // Perform keyword search
-    const searchTool = tools.find(t => t.name === 'search_documents');
-    if (searchTool && query) {
-      const searchResults = await searchTool.func(query);
-      const docs = JSON.parse(searchResults);
-      retrievedDocs.push(...docs.map(doc => ({ ...doc, searchType: 'keyword' })));
+  // Execute web search if available
+  if (process.env.TAVILY_API_KEY && TavilySearchResults) {
+    const searchTool = tools.find(t => t.name === 'search' || t.name.includes('search'));
+    if (searchTool && research_query) {
+      try {
+        const searchResult = await searchTool.func(research_query);
+        searchResults.push({
+          source: 'web_search',
+          query: research_query,
+          results: searchResult
+        });
+      } catch (error) {
+        console.error('Web search error:', error);
+      }
     }
+  }
 
-    // Perform semantic search
-    const semanticTool = tools.find(t => t.name === 'semantic_search');
-    if (semanticTool && query) {
-      const semanticResults = await semanticTool.func(query);
-      const semanticDocs = JSON.parse(semanticResults);
-      
-      // Merge with existing results, avoiding duplicates
-      semanticDocs.forEach(doc => {
-        if (!retrievedDocs.find(existing => existing.id === doc.id)) {
-          retrievedDocs.push({ ...doc, searchType: 'semantic' });
-        }
+  // Execute database search
+  const dbTool = tools.find(t => t.name === 'research_database');
+  if (dbTool && research_query) {
+    try {
+      const dbResult = await dbTool.func(research_query);
+      searchResults.push({
+        source: 'research_database',
+        query: research_query,
+        results: dbResult
       });
+    } catch (error) {
+      console.error('Database search error:', error);
     }
-
-    // Sort by relevance/semantic score
-    retrievedDocs.sort((a, b) => {
-      const scoreA = a.relevanceScore || a.semanticScore || 0;
-      const scoreB = b.relevanceScore || b.semanticScore || 0;
-      return scoreB - scoreA;
-    });
-
-    return {
-      retrieved_docs: retrievedDocs,
-      messages: [...messages, new AIMessage(`Retrieved ${retrievedDocs.length} relevant documents.`)]
-    };
-    
-  } catch (error) {
-    console.error('Document retrieval error:', error);
-    return {
-      retrieved_docs: [],
-      messages: [...messages, new AIMessage("Error retrieving documents. Please try again.")]
-    };
   }
+
+  return {
+    search_results: searchResults,
+    messages: [...messages, new AIMessage(`Research executed. Found ${searchResults.length} sources of information.`)]
+  };
 }
 
-// Answer generation node
-async function generateAnswer(state) {
-  const { query, retrieved_docs, messages } = state;
+// Research synthesis node
+async function synthesizeResearch(state) {
+  const { research_query, search_results, messages } = state;
   const llm = createCustomLLM(process.env.DEFAULT_MODEL || 'grok');
   
-  // Create context from retrieved documents
-  const context = retrieved_docs.map((doc, index) => 
-    `Document ${index + 1} (${doc.title}):\n${doc.content}\nCategory: ${doc.category || doc.metadata?.category}\n`
-  ).join('\n---\n');
+  const synthesisPrompt = `You are a research synthesis expert. Based on the research query and gathered information, create a comprehensive research summary.
 
-  const answerPrompt = `You are a knowledgeable assistant with access to a document knowledge base. Answer the user's question based on the retrieved documents.
+Original Query: "${research_query}"
 
-User Question: "${query}"
+Research Results:
+${search_results.map((result, index) => 
+  `Source ${index + 1} (${result.source}): ${result.results}`
+).join('\n\n')}
 
-Retrieved Context:
-${context}
+Please provide:
+1. A comprehensive summary of findings
+2. Key insights and patterns
+3. Relevant data and statistics (if available)
+4. Conclusions and recommendations
+5. Areas for further research
+6. Properly formatted citations
 
-Instructions:
-1. Answer the question using information from the retrieved documents
-2. Cite which documents you're referencing
-3. If the documents don't contain enough information, say so clearly
-4. Provide a comprehensive but concise answer
-5. Include relevant details and examples from the context
-
-Answer:`;
+Format your response as a professional research report.`;
 
   try {
-    const response = await llm.invoke([new HumanMessage(answerPrompt)]);
+    const response = await llm.invoke([new HumanMessage(synthesisPrompt)]);
     
     return {
-      context,
+      research_summary: response.content,
       messages: [...messages, response]
     };
   } catch (error) {
-    console.error('Answer generation error:', error);
+    console.error('Research synthesis error:', error);
     return {
-      messages: [...messages, new AIMessage("Error generating answer. Please try again.")]
+      messages: [...messages, new AIMessage("Error synthesizing research. Please try again.")]
     };
   }
 }
 
-// Create the retrieval agent workflow
-const workflow = new StateGraph(RetrievalState)
-  .addNode("analyze", analyzeQuery)
-  .addNode("retrieve", retrieveDocuments)
-  .addNode("generate", generateAnswer)
-  .addEdge(START, "analyze")
-  .addEdge("analyze", "retrieve")
-  .addEdge("retrieve", "generate")
-  .addEdge("generate", END);
+// Create the research agent workflow
+const workflow = new StateGraph(ResearchState)
+  .addNode("plan", planResearch)
+  .addNode("execute", executeResearch)
+  .addNode("synthesize", synthesizeResearch)
+  .addEdge(START, "plan")
+  .addEdge("plan", "execute")
+  .addEdge("execute", "synthesize")
+  .addEdge("synthesize", END);
 
 // Compile the graph
 const graph = workflow.compile();
