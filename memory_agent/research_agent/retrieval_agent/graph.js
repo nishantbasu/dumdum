@@ -1,23 +1,27 @@
 // src/retrieval_agent/graph.js
-const { StateGraph, MessagesAnnotation, START, END } = require("@langchain/langgraph");
+const { StateGraph, START, END, Annotation } = require("@langchain/langgraph");
 const { ChatOpenAI } = require("@langchain/openai");
 const { DynamicTool } = require("@langchain/core/tools");
 const { HumanMessage, SystemMessage, AIMessage } = require("@langchain/core/messages");
 
-// Define retrieval state
-const RetrievalAnnotation = MessagesAnnotation.spec({
-  query: {
-    value: (x, y) => y ?? x ?? "",
-    default: () => ""
-  },
-  retrieved_docs: {
-    value: (x, y) => y ?? x ?? [],
+// Define retrieval state using proper Annotation
+const RetrievalState = Annotation.Root({
+  messages: Annotation({
+    reducer: (x, y) => x.concat(y),
     default: () => []
-  },
-  context: {
-    value: (x, y) => y ?? x ?? "",
+  }),
+  query: Annotation({
+    reducer: (x, y) => y ?? x ?? "",
     default: () => ""
-  }
+  }),
+  retrieved_docs: Annotation({
+    reducer: (x, y) => y ?? x ?? [],
+    default: () => []
+  }),
+  context: Annotation({
+    reducer: (x, y) => y ?? x ?? "",
+    default: () => ""
+  })
 });
 
 // Custom LLM configuration
@@ -53,31 +57,31 @@ const mockDocuments = [
   {
     id: "doc1",
     title: "Introduction to Machine Learning",
-    content: "Machine learning is a subset of artificial intelligence that enables computers to learn and improve from experience without being explicitly programmed. It involves algorithms that can identify patterns in data and make predictions or decisions.",
+    content: "Machine learning is a subset of artificial intelligence that enables computers to learn and improve from experience without being explicitly programmed. It involves algorithms that can identify patterns in data and make predictions or decisions. Key concepts include supervised learning, unsupervised learning, and reinforcement learning.",
     metadata: { category: "AI/ML", date: "2024-01-15", author: "Tech Team" }
   },
   {
     id: "doc2", 
     title: "Web Development Best Practices",
-    content: "Modern web development follows several key principles: responsive design, performance optimization, accessibility, security, and maintainable code structure. React, Node.js, and TypeScript are popular technologies in the current ecosystem.",
+    content: "Modern web development follows several key principles: responsive design, performance optimization, accessibility, security, and maintainable code structure. React, Node.js, and TypeScript are popular technologies in the current ecosystem. Important considerations include SEO, user experience, and scalability.",
     metadata: { category: "Web Dev", date: "2024-02-10", author: "Dev Team" }
   },
   {
     id: "doc3",
     title: "Database Design Principles",
-    content: "Good database design involves normalization, proper indexing, query optimization, and understanding relationships between entities. SQL and NoSQL databases each have their use cases depending on the application requirements.",
+    content: "Good database design involves normalization, proper indexing, query optimization, and understanding relationships between entities. SQL and NoSQL databases each have their use cases depending on the application requirements. Consider factors like ACID compliance, scalability, and data consistency.",
     metadata: { category: "Database", date: "2024-01-20", author: "Data Team" }
   },
   {
     id: "doc4",
     title: "API Security Guidelines",
-    content: "API security involves authentication, authorization, rate limiting, input validation, and proper error handling. JWT tokens, OAuth 2.0, and API keys are common authentication methods. Always use HTTPS and validate all inputs.",
+    content: "API security involves authentication, authorization, rate limiting, input validation, and proper error handling. JWT tokens, OAuth 2.0, and API keys are common authentication methods. Always use HTTPS and validate all inputs. Implement proper logging and monitoring for security incidents.",
     metadata: { category: "Security", date: "2024-02-05", author: "Security Team" }
   },
   {
     id: "doc5",
     title: "Cloud Computing Overview",
-    content: "Cloud computing provides on-demand access to computing resources including servers, storage, databases, and applications. Major providers include AWS, Azure, and Google Cloud. Key benefits include scalability, cost-effectiveness, and reliability.",
+    content: "Cloud computing provides on-demand access to computing resources including servers, storage, databases, and applications. Major providers include AWS, Azure, and Google Cloud. Key benefits include scalability, cost-effectiveness, and reliability. Consider factors like data sovereignty and vendor lock-in.",
     metadata: { category: "Cloud", date: "2024-01-30", author: "Infrastructure Team" }
   }
 ];
@@ -91,20 +95,25 @@ function createRetrievalTools() {
     name: "search_documents",
     description: "Search through the knowledge base documents using keywords",
     func: async (query) => {
-      const searchTerms = query.toLowerCase().split(' ');
-      
-      const relevantDocs = mockDocuments.filter(doc => {
-        const searchableText = `${doc.title} ${doc.content} ${doc.metadata.category}`.toLowerCase();
-        return searchTerms.some(term => searchableText.includes(term));
-      });
+      try {
+        const searchTerms = query.toLowerCase().split(' ');
+        
+        const relevantDocs = mockDocuments.filter(doc => {
+          const searchableText = `${doc.title} ${doc.content} ${doc.metadata.category}`.toLowerCase();
+          return searchTerms.some(term => searchableText.includes(term));
+        });
 
-      return JSON.stringify(relevantDocs.map(doc => ({
-        id: doc.id,
-        title: doc.title,
-        content: doc.content.substring(0, 200) + '...',
-        category: doc.metadata.category,
-        relevanceScore: Math.random() * 0.3 + 0.7 // Mock relevance score
-      })));
+        return JSON.stringify(relevantDocs.map(doc => ({
+          id: doc.id,
+          title: doc.title,
+          content: doc.content.substring(0, 200) + '...',
+          category: doc.metadata.category,
+          relevanceScore: Math.random() * 0.3 + 0.7 // Mock relevance score
+        })));
+      } catch (error) {
+        console.error('Document search error:', error);
+        return JSON.stringify([]);
+      }
     }
   }));
 
@@ -113,11 +122,16 @@ function createRetrievalTools() {
     name: "get_document",
     description: "Retrieve a specific document by its ID",
     func: async (docId) => {
-      const doc = mockDocuments.find(d => d.id === docId);
-      if (!doc) {
-        return "Document not found";
+      try {
+        const doc = mockDocuments.find(d => d.id === docId);
+        if (!doc) {
+          return "Document not found";
+        }
+        return JSON.stringify(doc);
+      } catch (error) {
+        console.error('Document retrieval error:', error);
+        return "Error retrieving document";
       }
-      return JSON.stringify(doc);
     }
   }));
 
@@ -126,32 +140,38 @@ function createRetrievalTools() {
     name: "semantic_search",
     description: "Find documents semantically similar to the query",
     func: async (query) => {
-      // Mock semantic search - in production, use vector embeddings
-      const keywords = {
-        'machine learning': ['AI/ML'],
-        'web development': ['Web Dev'],
-        'database': ['Database'],
-        'security': ['Security'],
-        'cloud': ['Cloud']
-      };
+      try {
+        // Mock semantic search - in production, use vector embeddings
+        const keywords = {
+          'machine learning': ['AI/ML'],
+          'artificial intelligence': ['AI/ML'],
+          'web development': ['Web Dev'],
+          'database': ['Database'],
+          'security': ['Security'],
+          'cloud': ['Cloud']
+        };
 
-      const queryLower = query.toLowerCase();
-      let relevantCategories = [];
-      
-      for (const [key, categories] of Object.entries(keywords)) {
-        if (queryLower.includes(key)) {
-          relevantCategories.push(...categories);
+        const queryLower = query.toLowerCase();
+        let relevantCategories = [];
+        
+        for (const [key, categories] of Object.entries(keywords)) {
+          if (queryLower.includes(key)) {
+            relevantCategories.push(...categories);
+          }
         }
+
+        const semanticDocs = mockDocuments.filter(doc => 
+          relevantCategories.includes(doc.metadata.category)
+        );
+
+        return JSON.stringify(semanticDocs.map(doc => ({
+          ...doc,
+          semanticScore: Math.random() * 0.2 + 0.8 // Mock semantic score
+        })));
+      } catch (error) {
+        console.error('Semantic search error:', error);
+        return JSON.stringify([]);
       }
-
-      const semanticDocs = mockDocuments.filter(doc => 
-        relevantCategories.includes(doc.metadata.category)
-      );
-
-      return JSON.stringify(semanticDocs.map(doc => ({
-        ...doc,
-        semanticScore: Math.random() * 0.2 + 0.8 // Mock semantic score
-      })));
     }
   }));
 
@@ -164,7 +184,7 @@ async function analyzeQuery(state) {
   const llm = createCustomLLM(process.env.DEFAULT_MODEL || 'grok');
   
   const lastMessage = messages[messages.length - 1];
-  const userQuery = lastMessage.content;
+  const userQuery = lastMessage?.content || "No query provided";
   
   const analysisPrompt = `Analyze this user query and determine the best retrieval strategy:
 
@@ -188,6 +208,7 @@ Respond with your analysis and recommended search strategy.`;
   } catch (error) {
     console.error('Query analysis error:', error);
     return {
+      query: userQuery,
       messages: [new AIMessage("Error analyzing query. Proceeding with default search.")]
     };
   }
@@ -203,7 +224,7 @@ async function retrieveDocuments(state) {
   try {
     // Perform keyword search
     const searchTool = tools.find(t => t.name === 'search_documents');
-    if (searchTool) {
+    if (searchTool && query) {
       const searchResults = await searchTool.func(query);
       const docs = JSON.parse(searchResults);
       retrievedDocs.push(...docs.map(doc => ({ ...doc, searchType: 'keyword' })));
@@ -211,7 +232,7 @@ async function retrieveDocuments(state) {
 
     // Perform semantic search
     const semanticTool = tools.find(t => t.name === 'semantic_search');
-    if (semanticTool) {
+    if (semanticTool && query) {
       const semanticResults = await semanticTool.func(query);
       const semanticDocs = JSON.parse(semanticResults);
       
@@ -286,7 +307,7 @@ Answer:`;
 }
 
 // Create the retrieval agent workflow
-const workflow = new StateGraph(RetrievalAnnotation)
+const workflow = new StateGraph(RetrievalState)
   .addNode("analyze", analyzeQuery)
   .addNode("retrieve", retrieveDocuments)
   .addNode("generate", generateAnswer)
