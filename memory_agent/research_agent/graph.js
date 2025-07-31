@@ -1,24 +1,35 @@
 // src/research_agent/graph.js
-const { StateGraph, MessagesAnnotation, START, END } = require("@langchain/langgraph");
+const { StateGraph, START, END, Annotation } = require("@langchain/langgraph");
 const { ChatOpenAI } = require("@langchain/openai");
-const { TavilySearchResults } = require("@langchain/community/tools/tavily_search");
 const { DynamicTool } = require("@langchain/core/tools");
 const { HumanMessage, SystemMessage, AIMessage } = require("@langchain/core/messages");
 
-// Define research state
-const ResearchAnnotation = MessagesAnnotation.spec({
-  research_query: {
-    value: (x, y) => y ?? x ?? "",
-    default: () => ""
-  },
-  search_results: {
-    value: (x, y) => y ?? x ?? [],
+// Conditionally import Tavily only if available
+let TavilySearchResults;
+try {
+  TavilySearchResults = require("@langchain/community/tools/tavily_search").TavilySearchResults;
+} catch (error) {
+  console.log("Tavily not available - web search disabled for research agent");
+}
+
+// Define research state using proper Annotation
+const ResearchState = Annotation.Root({
+  messages: Annotation({
+    reducer: (x, y) => x.concat(y),
     default: () => []
-  },
-  research_summary: {
-    value: (x, y) => y ?? x ?? "",
+  }),
+  research_query: Annotation({
+    reducer: (x, y) => y ?? x ?? "",
     default: () => ""
-  }
+  }),
+  search_results: Annotation({
+    reducer: (x, y) => y ?? x ?? [],
+    default: () => []
+  }),
+  research_summary: Annotation({
+    reducer: (x, y) => y ?? x ?? "",
+    default: () => ""
+  })
 });
 
 // Custom LLM configuration
@@ -53,8 +64,8 @@ function createCustomLLM(modelName) {
 function createResearchTools() {
   const tools = [];
 
-  // Web search tool
-  if (process.env.TAVILY_API_KEY) {
+  // Web search tool (optional)
+  if (process.env.TAVILY_API_KEY && TavilySearchResults) {
     tools.push(new TavilySearchResults({
       maxResults: 10,
       apiKey: process.env.TAVILY_API_KEY,
@@ -70,9 +81,9 @@ function createResearchTools() {
     func: async (query) => {
       // Mock implementation - replace with actual database search
       return `Searched internal database for: "${query}". Found 3 relevant research papers: 
-      1. "AI Applications in Modern Technology" (2024)
-      2. "Machine Learning Trends and Analysis" (2024) 
-      3. "Future of Artificial Intelligence" (2023)
+      1. "AI Applications in Modern Technology" (2024) - Discusses current AI trends and applications
+      2. "Machine Learning Trends and Analysis" (2024) - Comprehensive analysis of ML developments
+      3. "Future of Artificial Intelligence" (2023) - Predictions and forecasts for AI advancement
       
       Note: This is a mock result. Replace with actual database integration.`;
     }
@@ -81,17 +92,21 @@ function createResearchTools() {
   // Citation formatter tool
   tools.push(new DynamicTool({
     name: "format_citations",
-    description: "Format research citations in APA or MLA style",
+    description: "Format research citations in APA or MLA style. Input format: 'style|citation'",
     func: async (input) => {
-      const [style, ...citationParts] = input.split('|');
-      const citation = citationParts.join('|');
-      
-      if (style.toLowerCase() === 'apa') {
-        return `APA Format: ${citation} (Retrieved ${new Date().toLocaleDateString()})`;
-      } else if (style.toLowerCase() === 'mla') {
-        return `MLA Format: ${citation}. Web. ${new Date().toLocaleDateString()}.`;
+      try {
+        const [style, ...citationParts] = input.split('|');
+        const citation = citationParts.join('|');
+        
+        if (style.toLowerCase() === 'apa') {
+          return `APA Format: ${citation} (Retrieved ${new Date().toLocaleDateString()})`;
+        } else if (style.toLowerCase() === 'mla') {
+          return `MLA Format: ${citation}. Web. ${new Date().toLocaleDateString()}.`;
+        }
+        return `Citation: ${citation}`;
+      } catch (error) {
+        return 'Error formatting citation. Use format: style|citation';
       }
-      return `Citation: ${citation}`;
     }
   }));
 
@@ -104,7 +119,7 @@ async function planResearch(state) {
   const llm = createCustomLLM(process.env.DEFAULT_MODEL || 'grok');
   
   const lastMessage = messages[messages.length - 1];
-  const userQuery = lastMessage.content;
+  const userQuery = lastMessage?.content || "No query provided";
   
   const planningPrompt = `You are a research planning assistant. Analyze this research request and create a structured research plan:
 
@@ -128,7 +143,8 @@ Respond with a clear research plan.`;
   } catch (error) {
     console.error('Research planning error:', error);
     return {
-      messages: [new AIMessage("Error creating research plan. Please try again.")]
+      research_query: userQuery,
+      messages: [new AIMessage("Error creating research plan. Proceeding with basic research.")]
     };
   }
 }
@@ -141,17 +157,19 @@ async function executeResearch(state) {
   const searchResults = [];
   
   // Execute web search if available
-  const searchTool = tools.find(t => t.name === 'search' || t.name.includes('search'));
-  if (searchTool && research_query) {
-    try {
-      const searchResult = await searchTool.func(research_query);
-      searchResults.push({
-        source: 'web_search',
-        query: research_query,
-        results: searchResult
-      });
-    } catch (error) {
-      console.error('Search error:', error);
+  if (process.env.TAVILY_API_KEY && TavilySearchResults) {
+    const searchTool = tools.find(t => t.name === 'search' || t.name.includes('search'));
+    if (searchTool && research_query) {
+      try {
+        const searchResult = await searchTool.func(research_query);
+        searchResults.push({
+          source: 'web_search',
+          query: research_query,
+          results: searchResult
+        });
+      } catch (error) {
+        console.error('Web search error:', error);
+      }
     }
   }
 
@@ -193,7 +211,7 @@ ${search_results.map((result, index) =>
 Please provide:
 1. A comprehensive summary of findings
 2. Key insights and patterns
-3. Relevant data and statistics
+3. Relevant data and statistics (if available)
 4. Conclusions and recommendations
 5. Areas for further research
 6. Properly formatted citations
@@ -215,21 +233,8 @@ Format your response as a professional research report.`;
   }
 }
 
-// Conditional edge function
-function shouldContinueResearch(state) {
-  const { search_results } = state;
-  
-  // If we have search results, move to synthesis
-  if (search_results && search_results.length > 0) {
-    return "synthesize";
-  }
-  
-  // Otherwise, execute research
-  return "execute";
-}
-
 // Create the research agent workflow
-const workflow = new StateGraph(ResearchAnnotation)
+const workflow = new StateGraph(ResearchState)
   .addNode("plan", planResearch)
   .addNode("execute", executeResearch)
   .addNode("synthesize", synthesizeResearch)
